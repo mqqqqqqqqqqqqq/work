@@ -7,107 +7,91 @@ type
   Node_V : enum {valid, invalid};
 
   MSG : record
-    LeaderID : NODE;
+    MSG_TYPE: STATE;
+    MSG_Leader : NODE;
   end;
 
 --声明变量
 var
   round: 1..N;
-  Node_num: 0..N;
-  msg: 0..N; -- 接收到的消息
-  Leader_num: 0..N;
+  LeaderID: 0..N;
   leaderElected: boolean; -- 是否选出了Leader
-  Node_State: array [NODE] of STATE;
-  Node_MSG: array [NODE] of Node_V;
+  Point_state: array [NODE] of Node_V;
   Msg : array [NODE] of MSG;
 
 --初始化
 startstate
   round := 1;
-  Node_num := 0;
-  msg := 0;
-  Leader_num := 0;
   for i: NODE do
-    Node_State[i] := IDLE;
-    Node_MSG[i] := valid;
-    Msg[i].LeaderID := 0;
+    Msg[i].MSG_TYPE := IDLE;
+    Point_state[i] := invalid;
+    Msg[i].MSG_Leader := 0;
   end;
   leaderElected := false;
 endstartstate;
 
 ruleset i: NODE do
 rule "Leader election protocol"
-  Node_State[i] = ELECTION &
+  Msg[i].MSG_TYPE = IDLE &
+  Point_state[i] = invalid &
   leaderElected = false &
-  Node_MSG[i] = valid
+  round != N
 ==>
-  Node_num := i;
-  msg := Node_num; -- 发送自己的编号给下一个节点
+  Point_state[i] := valid;
+  Msg[i].MSG_Leader := i;
   round := round + 1;
+  Msg[(i % N) + 1].MSG_TYPE := ELECTION;
+  Msg[(i % N) + 1].MSG_Leader := Msg[i].MSG_Leader;
+  undefine LeaderID;
 endrule;
 endruleset;
 
 ruleset i: NODE do
 rule "Process message"
-  Node_State[i] = ELECTION &
-  msg != 0
+  Msg[i].MSG_TYPE = ELECTION &
+  Point_state[i] = valid &
+  leaderElected = false &
+  round != N
 ==>
-  if msg > Node_num then
-    Node_num := msg;
+  if i >= Msg[i].MSG_Leader then
+    Msg[i].MSG_Leader := i;
+    LeaderID:= i;
   endif;
 endrule;
 endruleset;
 
 ruleset i : NODE do
 rule "Finish round"
-  Node_State[i] = ELECTION &
-  round = N &
-  msg != 0
+  Msg[i].MSG_TYPE = ELECTION &
+  Point_state[i] = valid &
+  leaderElected = false &
+  Msg[i].MSG_Leader = i
 ==>
-  if Node_MSG[Node_num] = valid then
-    for j : NODE do
-      Msg[j].LeaderID := Leader_num;
-      Node_State[j] := IDLE;
-    endfor;
-    leaderElected := true;
-    Leader_num := Node_num;
-    Node_State[Leader_num] := LEADER;
-    msg := 0;
-  else
-    Node_num := Node_num + 1; -- 下一个节点成为候选者
-    round := 1; -- 下一轮
-  endif;
-  Node_State[i] := ELECTION; -- 成为Follower
+  Msg[i].MSG_Leader := LeaderID;
+  Msg[i].MSG_TYPE := IDLE;
+  leaderElected := true;
+  Msg[LeaderID].MSG_TYPE := LEADER;
 endrule;
 endruleset;
 
 ruleset i: NODE do
 rule "Leader Invalid"
-  Node_State[i] = LEADER &
-  Node_MSG[i] = invalid &
+  Msg[i].MSG_TYPE = LEADER &
+  Point_state[i] = invalid &
   leaderElected = true
 ==>
-  for j: NODE do
-    Msg[j].LeaderID := 0;
-  endfor;
-  Node_State[i+1] := ELECTION;
-  Leader_num := 0;
+  Msg[(LeaderID % N) + 1].MSG_TYPE := ELECTION;
   leaderElected := false;
   round := 1;
+  undefine Msg[i].MSG_Leader;
+  undefine LeaderID;
 endrule;
 endruleset;
-
---检查是否选出了Leader
-rule "Check Leader election"
-  round = N & 
-  leaderElected = false
-==>
-  error "Leader election failed";
-endrule;
 
 invariant "LeaderUniqueness"
 forall m: NODE do
   forall n: NODE do
-    m != n -> (Node_State[m] != LEADER | Node_State[n] != LEADER | m = n)
+    (m != n -> (Msg[m].MSG_TYPE != LEADER | Msg[n].MSG_TYPE != LEADER | m = n)) & 
+    ((leaderElected = true & m != n) -> (Msg[m].MSG_Leader = Msg[n].MSG_Leader)) 
   end
 end;
