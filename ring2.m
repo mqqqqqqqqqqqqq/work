@@ -1,43 +1,52 @@
 const
-  N: 8;  -- 环上的节点数
+  N: 12;  -- 环上的节点数
 
 type
-  NODE : 0..N;
-  STATE: enum {IDLE, ELECTION, LEADER}; -- 节点状态
-  Node_V : enum {valid, invalid};
+  NODE : 1..N;
+  NUM : 0..N;
+  MSG_STATE: enum {IDLE, ELECTION, LEADER}; -- 消息状态
+  Node_STATE : enum {valid, invalid}; -- 节点状态
 
   MSG : record
-    MSG_TYPE: STATE;
+    MSG_TYPE: MSG_STATE;
     MSG_Leader : NODE;
+  end;
+
+  POINT : record
+    ID : NODE;
+    isLeader: boolean; -- 是否是Leader
+    LeaderElected: NODE;
+    Point_state: Node_STATE;
   end;
 
 --声明变量
 var
-  round: 1..N;
-  LeaderID: 0..N;
-  leaderElected: boolean; -- 是否选出了Leader
-  Point_state: array [NODE] of Node_V;
+  round: NUM;
   Msg : array [NODE] of MSG;
+  Point : array [NODE] of POINT;
+  LeaderID : NODE;
 
 --初始化
 startstate
-  round := 1;
+  round := 0;
   for i: NODE do
     Msg[i].MSG_TYPE := IDLE;
-    Point_state[i] := invalid;
-    Msg[i].MSG_Leader := 0;
+    undefine Msg[i].MSG_Leader;
+    Point[i].ID := i;
+    Point[i].isLeader := false;
+    undefine Point[i].LeaderElected;
+    Point[i].Point_state := invalid;
   end;
-  leaderElected := false;
+  undefine LeaderID;
 endstartstate;
 
 ruleset i: NODE do
 rule "Leader election protocol"
   Msg[i].MSG_TYPE = IDLE &
-  Point_state[i] = invalid &
-  leaderElected = false &
-  round != N
+  Point[i].Point_state = invalid & 
+  round = 0
 ==>
-  Point_state[i] := valid;
+  Point[i].Point_state := valid;
   Msg[i].MSG_Leader := i;
   round := round + 1;
   Msg[(i % N) + 1].MSG_TYPE := ELECTION;
@@ -49,49 +58,83 @@ endruleset;
 ruleset i: NODE do
 rule "Process message"
   Msg[i].MSG_TYPE = ELECTION &
-  Point_state[i] = valid &
-  leaderElected = false &
-  round != N
+  Point[i].isLeader = false
 ==>
-  if i >= Msg[i].MSG_Leader then
+  if Point[i].Point_state = invalid then
+    round := round + 1;
+  endif;
+  if Point[i].ID > Msg[i].MSG_Leader then
+    Point[i].Point_state := valid;
     Msg[i].MSG_Leader := i;
-    LeaderID:= i;
+    Msg[i].MSG_TYPE := IDLE;
+    Msg[(i % N) + 1].MSG_TYPE := ELECTION;
+    Msg[(i % N) + 1].MSG_Leader := Msg[i].MSG_Leader;
+  elsif Msg[i].MSG_Leader > Point[i].ID then
+    Point[i].Point_state := valid;
+    Msg[i].MSG_TYPE := IDLE;
+    Msg[(i % N) + 1].MSG_TYPE := ELECTION;
+    Msg[(i % N) + 1].MSG_Leader := Msg[i].MSG_Leader;
+  elsif Point[i].Point_state = valid & Msg[i].MSG_Leader = Point[i].ID & Msg[i].MSG_TYPE = ELECTION then
+    LeaderID := i;
+    Point[i].isLeader := true;
+    Point[i].LeaderElected := LeaderID;
+    Msg[i].MSG_Leader := LeaderID;
+    Msg[i].MSG_TYPE := LEADER;
+    Msg[(i % N) + 1].MSG_Leader := LeaderID;
+    Msg[(i % N) + 1].MSG_TYPE := LEADER;
   endif;
 endrule;
 endruleset;
 
 ruleset i : NODE do
 rule "Finish round"
-  Msg[i].MSG_TYPE = ELECTION &
-  Point_state[i] = valid &
-  leaderElected = false &
-  Msg[i].MSG_Leader = i
+  Msg[i].MSG_TYPE = LEADER &
+  Point[i].Point_state = valid &
+  ISUNDEFINED(Point[i].LeaderElected)
 ==>
-  Msg[i].MSG_Leader := LeaderID;
-  Msg[i].MSG_TYPE := IDLE;
-  leaderElected := true;
-  Msg[LeaderID].MSG_TYPE := LEADER;
+  Point[i].LeaderElected := LeaderID;
+  if Point[(i % N) + 1].isLeader = true then
+    Msg[(i % N) + 1].MSG_TYPE := IDLE;
+    undefine Msg[(i % N) + 1].MSG_Leader;
+  else
+    Msg[(i % N) + 1].MSG_TYPE := LEADER;
+    Msg[(i % N) + 1].MSG_Leader := LeaderID;
+  endif;
 endrule;
 endruleset;
 
 ruleset i: NODE do
 rule "Leader Invalid"
   Msg[i].MSG_TYPE = LEADER &
-  Point_state[i] = invalid &
-  leaderElected = true
+  Point[i].Point_state = valid &
+  !ISUNDEFINED(Point[i].LeaderElected) &
+  Msg[LeaderID].MSG_TYPE = IDLE
 ==>
-  Msg[(LeaderID % N) + 1].MSG_TYPE := ELECTION;
-  leaderElected := false;
-  round := 1;
+  Point[i].Point_state := invalid;
+  undefine Point[i].LeaderElected;
+  Msg[i].MSG_TYPE := IDLE;
+  round := round - 1;
   undefine Msg[i].MSG_Leader;
-  undefine LeaderID;
+  if Point[(i % N) + 1].isLeader = true then
+    Point[(i % N) + 1].Point_state := invalid;
+    round := round - 1;
+    Point[(i % N) + 1].isLeader := false;
+    undefine Point[(i % N) + 1].LeaderElected;
+  endif;
 endrule;
 endruleset;
 
 invariant "LeaderUniqueness"
 forall m: NODE do
   forall n: NODE do
-    (m != n -> (Msg[m].MSG_TYPE != LEADER | Msg[n].MSG_TYPE != LEADER | m = n)) & 
-    ((leaderElected = true & m != n) -> (Msg[m].MSG_Leader = Msg[n].MSG_Leader)) 
+    (Point[m].isLeader = true -> m = LeaderID) &
+    (m != n -> Point[m].isLeader = false | Point[n].isLeader = false)
+  end
+end;
+
+invariant "LeaderID is MAX"
+forall m:NODE do
+  forall n:NODE do
+    Point[m].isLeader = true -> Point[m].ID >= Point[n].ID
   end
 end;
